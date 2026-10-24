@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>20 Questions · Launcher</title><style>body{background:#10111c;color:#f5f5ff;font:16px system-ui;margin:0;min-height:100vh;display:grid;place-items:center}.card{max-width:440px;margin:20px;padding:28px;border:1px solid #44465f;border-radius:20px;background:#202236}h1{margin:0 0 12px}p{line-height:1.6;color:#c6c6dc}a,button{color:white;background:#7359ee;border:0;border-radius:12px;padding:14px 18px;font-weight:700;display:inline-block;text-decoration:none;cursor:pointer}</style></head><body><main class="card"><h1>🎉 20 Questions</h1><p id="status">Finding the newest game version…</p><div id="actions"></div></main><script>
+(async()=>{
+ const status=document.getElementById('status'),actions=document.getElementById('actions');
+ const repo='BFro6/20-Questions';
+ const pattern=/^20Questions_v(\d+)\.(\d+)(?:\.(\d+))?\.html$/i;
+ function fallback(message){status.textContent=message+' You can open a game version from the repository.';const a=document.createElement('a');a.href='https://github.com/'+repo;a.textContent='View game files';actions.append(a)}
+ try{
+ const response=await fetch('https://api.github.com/repos/'+repo+'/contents/?ref=main',{cache:'no-store',headers:{Accept:'application/vnd.github+json'}});
+ if(!response.ok)throw Error('GitHub directory unavailable ('+response.status+')');
+ const files=await response.json();if(!Array.isArray(files))throw Error('Invalid directory response');
+ const versions=files.filter(x=>x.type==='file'&&pattern.test(x.name)).map(x=>({name:x.name,parts:x.name.match(pattern).slice(1).map(n=>Number(n||0))}));
+ versions.sort((a,b)=>{for(let i=0;i<3;i++){if(a.parts[i]!==b.parts[i])return b.parts[i]-a.parts[i]}return 0});
+ if(!versions.length){fallback('No versioned game files found yet.');return}
+ const newest=versions[0];status.textContent='Launching '+newest.name+'…';
+ const target=new URL('./'+encodeURIComponent(newest.name),location.href);
+ const a=document.createElement('a');a.href=target.href;a.textContent='Play '+newest.name;actions.append(a);
+ location.replace(target.href);
+ }catch(e){fallback('Automatic version check failed. '+e.message+'.')}
+})();
+</script></body></html>
