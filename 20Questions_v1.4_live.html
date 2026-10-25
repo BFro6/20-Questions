@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>20 Questions Live | Fro & Co. Games</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#f5f4ff;background:#111526}
+*{box-sizing:border-box}
+body{margin:0}
+main{max-width:680px;margin:auto;padding:20px 15px 70px}
+header{color:#b9a5ff;font-size:13px;font-weight:800;letter-spacing:2px}
+h1{font-size:36px;margin:12px 0 4px}
+h2{font-size:21px;margin:0 0 14px}
+p{line-height:1.5}
+.panel{background:#22263d;border:1px solid #444968;border-radius:18px;padding:18px;margin:16px 0}
+input,select,button{width:100%;padding:14px;border-radius:11px;font:inherit;margin:6px 0}
+input,select{background:#111526;color:white;border:1px solid #616987}
+button{background:#7559ed;color:white;border:0;font-weight:750;cursor:pointer}
+button:disabled{opacity:.45}
+.secondary{background:#3b4565}
+.yes{background:#138064}
+.no{background:#a5415a}
+.maybe{background:#90702e}
+.row{display:flex;gap:8px}
+.row>*{flex:1;min-width:0}
+.hidden{display:none!important}
+.muted{color:#b4bad2;font-size:14px}
+.item{background:#151a2d;border-radius:12px;padding:13px;margin:10px 0}
+.code{font-size:30px;font-weight:900;letter-spacing:4px}
+.status{color:#e9c985}
+label{display:block;color:#c9cde0;margin-top:10px}
+strong{overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<header>FRO & CO. GAMES · LIVE ROOMS</header>
+<h1>20 Questions</h1>
+<p class="muted">One host. One secret. Everyone else asks and guesses.</p>
+
+<section id="entry" class="panel">
+<h2>Play together</h2>
+<label>Your name</label>
+<input id="name" placeholder="Enter your name" maxlength="32">
+<div class="row">
+<button id="create">Create Room</button>
+<button class="secondary" id="joinShow">Join Room</button>
+</div>
+<div id="joinFields" class="hidden">
+<label>Room code</label>
+<input id="code" placeholder="ABC123" maxlength="6">
+<button id="join">Join Game</button>
+</div>
+</section>
+
+<section id="game" class="hidden">
+<div class="panel">
+<div class="row">
+<div><div class="muted">ROOM CODE</div><div class="code" id="roomCode"></div></div>
+<div><div class="muted">QUESTIONS</div><h2 id="count">0 / 20</h2></div>
+</div>
+<p id="connection" class="status">Connecting...</p>
+<button id="invite" class="secondary">Copy Invite Link</button>
+<p id="players" class="muted"></p>
+</div>
+
+<div id="setup" class="panel hidden">
+<h2>Host: Choose the secret</h2>
+<label>Person, place, or thing</label>
+<input id="secret" maxlength="120" placeholder="Michael Jordan">
+<label>Category</label>
+<select id="category">
+<option>Person</option><option>Place</option><option>Thing</option>
+</select>
+<label>Game mode</label>
+<select id="mode">
+<option value="classic">Classic — wrong guesses keep playing</option>
+<option value="minefield">Minefield — wrong guesses eliminate</option>
+</select>
+<button id="start">Start Round</button>
+</div>
+
+<div id="inbox" class="panel hidden">
+<h2>Host Inbox</h2>
+<p class="muted">Questions and guesses arrive privately. You make the final call.</p>
+<div id="queue"></div>
+<button class="secondary" id="reveal">End Round & Reveal</button>
+<button class="secondary" id="reset">New Round</button>
+</div>
+
+<div id="actions" class="panel hidden">
+<h2>Ask or Guess</h2>
+<select id="kind">
+<option value="question">Ask a yes/no question</option>
+<option value="guess">Make a final guess</option>
+</select>
+<input id="submission" maxlength="220" placeholder="Is this person an athlete?">
+<button id="submit">Send to Host</button>
+<p class="muted">One pending submission at a time.</p>
+</div>
+
+<div id="result" class="panel hidden"></div>
+
+<div class="panel">
+<h2>Question History</h2>
+<div id="history" class="muted">Waiting for the first question...</div>
+</div>
+</section>
+
+<p id="notice" class="status" role="status"></p>
+</main>
+
+<script>
+"use strict";
+const API="https://froco-20questions-rooms.fromeyer14.workers.dev";
+const $=id=>document.getElementById(id);
+const show=(id,on)=>$(id).classList.toggle("hidden",!on);
+const notice=s=>$("notice").textContent=s;
+const clean=s=>String(s||"").trim();
+let room="",token="",ws=null,latest=null,retry=null;
+let pendingLocal=false;
+
+$("name").value=localStorage.getItem("frocoName")||"";
+
+const inviteCode=new URL(location.href).searchParams.get("room");
+if(inviteCode){
+ $("code").value=inviteCode.toUpperCase();
+ show("joinFields",true);
+}
+
+$("joinShow").onclick=()=>show("joinFields",true);
+
+function randomCode(){
+ const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+ const bytes=crypto.getRandomValues(new Uint8Array(6));
+ return Array.from(bytes,b=>chars[b%chars.length]).join("");
+}
+
+async function enter(host){
+ try{
+  const name=clean($("name").value);
+  if(!name)throw Error("Enter your name.");
+  localStorage.setItem("frocoName",name);
+  room=host?randomCode():clean($("code").value).toUpperCase();
+  if(!/^[A-Z0-9]{6}$/.test(room))throw Error("Enter a six-character room code.");
+  notice("Connecting...");
+  const res=await fetch(API+"/room/"+room+"/"+(host?"create":"join"),{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({name})
+  });
+  const data=await res.json();
+  if(!res.ok)throw Error(data.error||"Could not join room.");
+  token=data.token;
+  sessionStorage.setItem("frocoRoom",JSON.stringify({room,token}));
+  show("entry",false);
+  show("game",true);
+  connect();
+ }catch(e){notice(e.message)}
+}
+$("create").onclick=()=>enter(true);
+$("join").onclick=()=>enter(false);
+
+function connect(){
+ if(!token)return;
+ const address=API.replace("https://","wss://")+
+  "/room/"+room+"/connect?token="+encodeURIComponent(token);
+ ws=new WebSocket(address);
+ ws.onopen=()=>{
+  $("connection").textContent="🟢 Connected";
+  notice("");
+ };
+ ws.onmessage=e=>{
+  let d;
+  try{d=JSON.parse(e.data)}catch{return}
+  if(d.type==="error"){notice(d.message);return}
+  if(d.type==="state"){latest=d;render(d)}
+ };
+ ws.onclose=()=>{
+  $("connection").textContent="🟡 Reconnecting...";
+  clearTimeout(retry);
+  retry=setTimeout(connect,2500);
+ };
+ ws.onerror=()=>notice("Connection problem. Check Cloudflare Worker.");
+}
+
+function send(action,more={}){
+ if(!ws||ws.readyState!==WebSocket.OPEN){
+  notice("Not connected yet.");
+  return false;
+ }
+ ws.send(JSON.stringify({action,...more}));
+ return true;
+}
+
+function element(tag,text,cls){
+ const e=document.createElement(tag);
+ if(text!==undefined)e.textContent=text;
+ if(cls)e.className=cls;
+ return e;
+}
+function button(text,cls,fn){
+ const b=element("button",text,cls);
+ b.onclick=fn;
+ return b;
+}
+
+function render(d){
+ $("roomCode").textContent=d.room;
+ $("count").textContent=d.questions.length+" / "+d.limit;
+ $("players").textContent="Players: "+
+  (d.players.map(p=>p.name+(p.eliminated?" 💥":"")).join(", ")||"Waiting...");
+ show("setup",d.host&&!d.started);
+ show("inbox",d.host&&d.started&&!d.finished);
+ show("actions",!d.host&&d.started&&!d.finished);
+ show("result",d.finished||!d.started);
+
+ const history=$("history");
+ history.replaceChildren();
+ if(!d.questions.length)history.append(element("p","Waiting for the first question..."));
+ for(const q of d.questions){
+  const item=element("div",undefined,"item");
+  item.append(
+   element("small",q.playerName+" asked"),
+   element("p",q.question),
+   element("strong",q.answer)
+  );
+  history.append(item);
+ }
+
+ const queue=$("queue");
+ queue.replaceChildren();
+ if(d.host){
+  if(!d.queue.length)queue.append(element("p","No pending submissions.","muted"));
+  for(const q of d.queue){
+   const item=element("div",undefined,"item");
+   item.append(
+    element("small",q.playerName+" · "+(q.kind==="guess"?"FINAL GUESS":"QUESTION")),
+    element("p",q.value)
+   );
+   if(q.kind==="guess"){
+    item.append(
+     button("✓ Correct","yes",()=>send("answer",{id:q.id,answer:"correct"})),
+     button("✕ Wrong","no",()=>send("answer",{id:q.id,answer:"wrong"}))
+    );
+   }else{
+    const row=element("div",undefined,"row");
+    for(const a of ["Yes","No","Maybe","Unknown"]){
+     row.append(button(a,a==="Yes"?"yes":a==="No"?"no":"secondary",
+      ()=>send("answer",{id:q.id,answer:a})));
+    }
+    item.append(row);
+   }
+   item.append(button("Dismiss without counting","secondary",
+    ()=>send("answer",{id:q.id,answer:"dismiss"})));
+   queue.append(item);
+  }
+ }
+
+ const result=$("result");
+ result.replaceChildren();
+ if(d.finished){
+  result.append(
+   element("h2",d.winner?"🏆 "+d.winner+" wins!":"Round over"),
+   element("p","The secret was: "+d.secret)
+  );
+  if(d.host)result.append(button("Start Next Round","secondary",()=>send("reset")));
+ }else if(!d.started){
+  result.append(element("p",d.host?"Choose a subject to start.":"Waiting for host..."));
+ }
+
+ if(!d.host){
+  const me=d.players.find(p=>p.id===token);
+  const eliminated=!!me?.eliminated;
+  const disabled=eliminated||pendingLocal||d.finished;
+  $("submit").disabled=disabled;
+  $("submission").disabled=disabled;
+  if(eliminated)notice("💥 Eliminated from this round.");
+ }
+}
+
+$("start").onclick=()=>send("setup",{
+ secret:$("secret").value,
+ category:$("category").value,
+ mode:$("mode").value
+});
+
+$("submit").onclick=()=>{
+ const value=clean($("submission").value);
+ if(!value)return notice("Enter a question or guess.");
+ if(send("submit",{kind:$("kind").value,value})){
+  pendingLocal=true;
+  $("submit").disabled=true;
+  $("submission").value="";
+  notice("Sent to host. Wait for an answer.");
+ }
+};
+
+$("reveal").onclick=()=>{
+ if(confirm("End the round and reveal the secret?"))send("reveal");
+};
+$("reset").onclick=()=>{
+ if(confirm("Start another round with the same players?"))send("reset");
+};
+
+$("invite").onclick=async()=>{
+ const link=location.origin+location.pathname+"?room="+room;
+ try{
+  await navigator.clipboard.writeText(link);
+  notice("Invite link copied!");
+ }catch{
+  notice("Share room code: "+room);
+ }
+};
+
+try{
+ const saved=JSON.parse(sessionStorage.getItem("frocoRoom")||"null");
+ if(saved?.room&&saved?.token){
+  room=saved.room;
+  token=saved.token;
+  show("entry",false);
+  show("game",true);
+  connect();
+ }
+}catch{}
+</script>
+</body>
+</html>
